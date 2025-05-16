@@ -1,0 +1,58 @@
+input:
+  gcp_pubsub:
+    project: <Project>
+    subscription: benthos-control-sub
+    max_outstanding_messages: 1
+
+pipeline:
+  threads: 1
+  processors:
+    - log:
+        level: INFO
+        message: 'Received control message: ${! content() }'
+
+    - mapping: |
+        meta kafka_topic = this.kafka_topic
+        meta publish_topic = this.publish_topic
+        meta consumer_name = this.consumer_name
+
+    # Step 2: Build your dynamic inline YAML (untouched)
+    - mapping: from "./dynamic_k2p_config.blobl"
+
+    # Step 3: Write YAML to hardcoded temp file
+    - command:
+        name: sh
+        args_mapping: |
+          [
+            "-c",
+            "cat > /tmp/config_temp.yaml"
+          ]
+
+    # Step 4: Launch subprocess using hardcoded file
+    - command:
+        name: sh
+        args_mapping: |
+          [
+            "-c",
+            "nohup rpk connect run /tmp/config_temp.yaml > /tmp/conn_temp.log 2>&1 &"
+          ]
+
+    # Step 6: Final subprocess launched log
+    - log:
+        level: ERROR
+        message: 'Launched subprocess for topic ${! meta("kafka_topic") } with publish topic ${! meta("publish_topic") } and consumer name ${! meta("consumer_name") }'
+
+    - sleep:
+        duration: '40s'  # Delay before ACK
+logger:
+  level: INFO
+  format: json
+  add_timestamp: true
+
+metrics:
+  # adding prefix 'benthos' to all the metrics
+  mapping: root = "benthos" + "_" + this
+  prometheus: {}
+
+output:
+  drop: {}

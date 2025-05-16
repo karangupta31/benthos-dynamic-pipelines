@@ -1,0 +1,84 @@
+input =  {
+  "read_until": {
+    "idle_timeout": "30s",
+    "restart_input": false,
+    "input": {
+      "broker": {
+        "copies": this.parallel_consumers.or(1),
+        "inputs": [
+          {
+            "kafka_franz": {
+              "seed_brokers": [ "${KAFKA_BROKERS}" ],
+              "sasl": [
+                {
+                  "mechanism": "${KAFKA_MECHANISM}",
+                  "password": "${KAFKA_PASSWORD}",
+                  "username": "${KAFKA_USERNAME}"
+                }
+              ],
+              "topics": [ this.kafka_topic ],
+              "client_id" : this.client_id.or("benthos"),
+              "consumer_group": this.consumer_name,
+              "start_from_oldest": true,
+              "checkpoint_limit": this.checkpoint_limit.or(1024),
+              "commit_period": this.commit_period.or("1s"),
+              "fetch_max_bytes": this.fetch_max_bytes.or("50MiB"),
+              "fetch_min_bytes": this.fetch_min_bytes.or("1KiB"),
+              "fetch_max_wait": this.fetch_max_wait.or("1s"),
+              "fetch_max_partition_bytes": this.fetch_max_partition_bytes.or("1MiB"),
+              "session_timeout": this.session_timeout.or("1m"),
+              "heartbeat_interval": this.heartbeat_interval.or("3s"),
+              "metadata_max_age": this.metadata_max_age.or("5m")
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+pipeline = {
+  "processors": [
+    {
+      "catch": [
+        {
+          "log": {
+            "level": "ERROR",
+            "message": "Error processing message: ${! error() }"
+          }
+        },
+        {"bloblang": "root = deleted()"}
+      ]
+    }
+  ]
+}
+
+let temp = "root = " + this.data
+pipeline.processors = root.pipeline.processors.append({ "mapping": $temp})
+
+
+#   dyanmically add the bloblang mapping from the control message
+#   "data":"{\"data\":{\"userId\":this.distinct_id.string(),\"key1\":\"val1\",\"key2\":\"val2\",\"metaInfo\":{\"abc\":\"23432\",\"id\":234}}}"
+#   data key in the payload needs to look like the above
+#   the placeholder shouldn't be between double quotes
+
+output = {
+  "gcp_pubsub": {
+    "project": this.publish_project,
+    "topic": this.publish_topic,
+    "batching": {
+      "count": this.batching_count.or(100),
+      "byte_size": this.batching_byte_size.or(100000),
+      "period": "1s"
+    },
+    "flow_control": {
+      "max_outstanding_messages": this.flow_max_messages.or(1000),
+      "max_outstanding_bytes": this.flow_max_bytes.or(10000000),
+      "limit_exceeded_behavior": "block"
+    }
+  }
+}
+root.logger = {
+  "level": "INFO",
+  "format": "logfmt",
+  "add_timestamp": true
+}
