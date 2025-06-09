@@ -1,0 +1,11 @@
+logger:
+  level: INFO
+  format: json
+  add_timestamp: true
+  static_fields:
+    "service": ${DEPLOYMENT_NAME:}
+
+metrics:
+  # adding prefix 'benthos' to all the metrics
+  mapping: root = "benthos" + "_" + this
+  prometheus: {}

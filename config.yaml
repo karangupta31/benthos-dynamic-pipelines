@@ -1,53 +1,90 @@
+http:
+  enabled: true
+  address: 0.0.0.0:4196
+
 input:
   gcp_pubsub:
-    project: <Project>
-    subscription: benthos-control-sub
-    max_outstanding_messages: 1
+    project: ${CONTROL_QUEUE_PROJECT}
+    subscription: ${CONTROL_QUEUE}
+    max_outstanding_messages: 1 # Ensures only one message is processed at a time
 
 pipeline:
   threads: 1
   processors:
     - log:
         level: INFO
-        message: 'Received control message: ${! content() }'
+        message: 'Received control message'
+        fields_mapping: |
+          root.custom_attributes.received_message = this
 
     - mapping: |
-        meta kafka_topic = this.kafka_topic
-        meta publish_topic = this.publish_topic
-        meta consumer_name = this.consumer_name
+        meta benthos_meta_info = this.benthos_meta_info
 
     # Step 2: Build your dynamic inline YAML (untouched)
-    - mapping: from "./dynamic_k2p_config.blobl"
+    - switch:
+        - check: this.processor == "kafka-to-pubsub"
+          processors:
+            - mapping: from "./blob_configs/kafka-to-pubsub/dynamic_k2p_config.blobl"
+        # Dafault - TBD should error out with a log
+        - processors:
+          - mapping: from "./blob_configs/kafka-to-pubsub/dynamic_k2p_config.blobl"
 
-    # Step 3: Write YAML to hardcoded temp file
-    - command:
-        name: sh
-        args_mapping: |
-          [
-            "-c",
-            "cat > /tmp/config_temp.yaml"
-          ]
 
-    # Step 4: Launch subprocess using hardcoded file
-    - command:
-        name: sh
-        args_mapping: |
-          [
-            "-c",
-            "nohup rpk connect run /tmp/config_temp.yaml > /tmp/conn_temp.log 2>&1 &"
-          ]
+    # Step 3: Execute YAML as benthos stream
+    - http:
+        url: "http://localhost:4195/streams/k2p"
+        verb: POST
+        headers:
+          Content-Type: application/yaml
+        retries: 3
+        retry_period: "5s"
+        max_retry_backoff: "5s"
 
-    # Step 6: Final subprocess launched log
     - log:
         level: ERROR
-        message: 'Launched subprocess for topic ${! meta("kafka_topic") } with publish topic ${! meta("publish_topic") } and consumer name ${! meta("consumer_name") }'
+        message: 'Launched Benthos stream worker'
+        fields_mapping: |
+          root.custom_attributes.benthos_meta_info = meta("benthos_meta_info")
 
-    - sleep:
-        duration: '40s'  # Delay before ACK
+    - while:
+        check: this.active == true
+        at_least_once: true
+        max_loops: ${CHECK_STATUS_TIMES:30} # Maximum number of times to check status
+        processors:
+          - sleep:
+              duration: "${CHECK_STATUS_DELAY:5s}" # Delay before checking status
+          - http:
+              url: "http://localhost:4195/streams/k2p"
+              verb: GET
+          - mapping: |
+              root = {
+                "active": this.active
+              }
+    - switch:
+        - check: this.active == false
+          processors:
+            - log:
+                level: INFO
+                message: 'Job successfully completed'
+                fields_mapping: |
+                  root.custom_attributes.benthos_meta_info = meta("benthos_meta_info")
+        - processors:
+            - log:
+                level: ERROR
+                message: 'Job took more time than expected, job will be retried'
+                fields_mapping: |
+                    root.custom_attributes.benthos_meta_info = meta("benthos_meta_info")
+    - http:
+        url: "http://localhost:4195/streams/k2p"
+        verb: DELETE
+
+
 logger:
   level: INFO
   format: json
   add_timestamp: true
+  static_fields:
+    "service": ${DEPLOYMENT_NAME:}
 
 metrics:
   # adding prefix 'benthos' to all the metrics
