@@ -4,7 +4,7 @@ This project provides a Benthos configuration that acts as a dynamic orchestrato
 
 This serves as a foundational pattern for scenarios where Benthos pipelines need to be created and managed dynamically using Benthos itself.
 
-The generated job is run as a benthos streams process, in a seperate process, which is running in parallel to the controller. We can call this the benthos worker.
+The generated job is run as a benthos streams process, in a separate process, which is running in parallel to the controller. We can call this the benthos worker.
 
 See [Running the Orchestrator](#running-the-orchestrator)
 

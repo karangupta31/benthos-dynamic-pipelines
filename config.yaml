@@ -25,7 +25,7 @@ pipeline:
         - check: this.processor == "kafka-to-pubsub"
           processors:
             - mapping: from "./blob_configs/kafka-to-pubsub/dynamic_k2p_config.blobl"
-        # Dafault - TBD should error out with a log
+        # Default - TBD should error out with a log
         - processors:
           - mapping: from "./blob_configs/kafka-to-pubsub/dynamic_k2p_config.blobl"
 
