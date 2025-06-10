@@ -4,26 +4,29 @@ This project provides a Benthos configuration that acts as a dynamic orchestrato
 
 This serves as a foundational pattern for scenarios where Benthos pipelines need to be created and managed dynamically using Benthos itself.
 
-**Current Implementation:** Subprocess-based (using `benthos -c` via `rpk connect run`).
+The generated job is run as a benthos streams process, in a separate process, which is running in parallel to the controller. We can call this the benthos worker.
 
-**Future Goal:** Transition to Benthos Streams API for more robust management within a single Benthos process.
+See [Running the Orchestrator](#running-the-orchestrator)
 
 ## How it Works
 
 1.  **Control Message Reception:** The main orchestrator Benthos instance listens to a GCP Pub/Sub subscription (e.g., `benthos-control-sub`).
 2.  **Dynamic Configuration Generation:**
-    *   Upon receiving a control message (JSON payload), it uses the `dynamic_k2p_config.blobl` Bloblang template to construct a complete Benthos YAML configuration string.
-    *   This generated YAML defines a new Benthos pipeline, typically for consuming from Kafka and producing to GCP Pub/Sub, with parameters specified in the control message.
+    *   Upon receiving a control message (JSON payload), it uses one of the Bloblang template to construct a complete Benthos YAML configuration string.
+    *   This generated YAML defines a new Benthos pipeline that includes:
+        *   A source (e.g., Kafka) to consume messages.
+        *   A processor that applies a transformation based on the control message's `data` field.
+        *   A sink (e.g., GCP Pub/Sub) to publish processed messages.
     *   The control message can also include a custom Bloblang mapping string in its `data` field, which will be embedded into the generated pipeline for data transformation.
-3.  **Subprocess Launch:**
-    *   The generated YAML is written to a temporary file (`/tmp/config_temp.yaml`).
-    *   A new Benthos process is launched in the background using `nohup rpk connect run /tmp/config_temp.yaml &` (which executes `benthos -c /tmp/config_temp.yaml`).
-4.  **Acknowledgement:** After a delay (to allow the subprocess to start), the control message is acknowledged.
+3.  **Stream Launch:**
+    *   The generated YAML is POST-ed to the streams http server.
+    *   A Benthos process is launched in the background within the streams benthos server
+4.  **Acknowledgement:** Once the streams process is completed, the control message is acknowledged.
 
 ## Key Components
 
-*   `benthos.yaml`: The configuration for the main orchestrator Benthos instance.
-*   `dynamic_k2p_config.blobl`: The Bloblang template used to generate configurations for the dynamically launched Benthos instances.
+*   `config.yaml`: The configuration for the main orchestrator Benthos instance.
+*   `blob_configs`: The Bloblang templates used to generate configurations for the dynamically launched Benthos instances.
 
 ## Prerequisites
 
@@ -31,31 +34,25 @@ This serves as a foundational pattern for scenarios where Benthos pipelines need
 2.  **GCP Project:**
     *   A Pub/Sub topic for control messages.
     *   A Pub/Sub subscription for the orchestrator to listen to (e.g., `benthos-control-sub`).
-    *   Pub/Sub topics for the dynamically launched instances to publish to.
     *   Appropriate GCP credentials configured for Benthos (e.g., via `GOOGLE_APPLICATION_CREDENTIALS` environment variable).
-3.  **Kafka Cluster:**
-    *   Accessible by the environment where Benthos will run.
-    *   Topics that the dynamic instances will consume from.
-4.  **Environment Variables:** The `dynamic_k2p_config.blobl` template expects Kafka credentials and broker information to be available as environment variables where the *dynamic Benthos instances are launched*:
-    *   `KAFKA_BROKERS`
-    *   `KAFKA_MECHANISM`
-    *   `KAFKA_USERNAME`
-    *   `KAFKA_PASSWORD`
-        Ensure these are set in the environment where the main orchestrator `benthos` process runs, as it will spawn child processes that inherit its environment.
-
+3.  Required resources for the requested job (e.g., Kafka topic, GCP Pub/Sub topic) must exist and be accessible by the dynamically launched Benthos instances.
 ## Running the Orchestrator
 
 1.  Ensure all prerequisites are met and environment variables are set.
-2.  Place `benthos.yaml` and `dynamic_k2p_config.blobl` in the same directory.
+2.  Place `config.yaml`, `blob_configs` and  `observability.yaml` in the same directory.
 3.  Navigate to that directory and run:
     *   Using `rpk` (Redpanda's tool, which bundles Benthos):
         ```bash
-        rpk connect run benthos.yaml
+        rpk connect run config.yaml
         ```
     *   Or, using a standalone Benthos binary:
         ```bash
         benthos -c benthos.yaml
         ```
+   4.  Open a separate shell and run (to run worker process):
+       ```bash
+        rpk connect streams -o observability.yaml
+       ```
 
 ## Sending a Control Message
 
@@ -70,6 +67,7 @@ Publish a JSON message to the GCP Pub/Sub topic that the orchestrator is subscri
   "publish_topic": "processed-events-destination",
   "consumer_name": "dynamic-consumer-group-main",
   "client_id": "my-dynamic-benthos-1",
+  "benthos_meta_info": "ANY META DATA YOU WANT IN LOGS",
   "data":"{\"data\":{\"userId\":this.distinct_id.string(),\"key1\":\"val1\",\"key1\":\"val1\",\"metaInfo\":{\"abc\":\"23432\",\"id\":234}}}"
 }
 ```
